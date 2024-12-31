@@ -145,3 +145,89 @@
     (var-set energy-reserve-cap new-limit)
     (ok true)))
 
+;; Set Refund Percentage
+;; Updates refund percentage. Adds meaningful contract functionality.
+(define-public (set-refund-percentage (new-percentage uint))
+  (begin
+    (asserts! (is-eq tx-sender admin) err-unauthorized)
+    (asserts! (<= new-percentage u100) err-invalid-amount)
+    (var-set refund-percentage new-percentage)
+    (ok true)))
+
+;; Remove energy from sale by a user
+(define-public (remove-energy-from-sale (amount uint))
+  (let (
+    (current-listing (default-to {amount: u0, price: u0} (map-get? energy-listing {seller: tx-sender})))
+  )
+    (asserts! (>= (get amount current-listing) amount) err-insufficient-tokens)
+    (try! (adjust-energy-reserve (to-int (- amount))))
+    (map-set energy-listing {seller: tx-sender} {amount: (- (get amount current-listing) amount), price: (get price current-listing)})
+    (ok true)))
+
+;; Purchase energy from a seller
+(define-public (purchase-energy (seller principal) (amount uint))
+  (let (
+    (listing (default-to {amount: u0, price: u0} (map-get? energy-listing {seller: seller})))
+    (total-cost (* amount (get price listing)))
+    (calculated-transaction-fee (calculate-transaction-fee total-cost))  ;; renamed variable
+    (buyer-balance (default-to u0 (map-get? eco-token-balance tx-sender)))
+    (seller-balance (default-to u0 (map-get? eco-token-balance seller)))
+    (admin-balance (default-to u0 (map-get? eco-token-balance admin)))
+  )
+    (asserts! (not (is-eq tx-sender seller)) err-unauthorized)
+    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (>= (get amount listing) amount) err-not-enough-balance)
+    (asserts! (>= buyer-balance (+ total-cost calculated-transaction-fee)) err-insufficient-tokens)
+
+    ;; Update balances
+    (map-set eco-token-balance seller (+ seller-balance total-cost))
+    (map-set eco-token-balance tx-sender (- buyer-balance (+ total-cost calculated-transaction-fee)))
+    (map-set eco-token-balance admin (+ admin-balance calculated-transaction-fee))
+    (map-set energy-listing {seller: seller} {amount: (- (get amount listing) amount), price: (get price listing)})
+
+    (ok true)))
+
+;; Refund energy tokens (only if conditions met)
+(define-public (refund-energy (amount uint))
+  (let (
+    (user-balance (default-to u0 (map-get? eco-token-balance tx-sender)))
+    (refund-amount (calculate-refund amount))
+    (admin-balance (default-to u0 (map-get? eco-token-balance admin)))
+  )
+    (asserts! (> amount u0) err-invalid-amount)
+    (asserts! (>= user-balance amount) err-not-enough-balance)
+    (asserts! (>= admin-balance refund-amount) err-transfer-failed)
+
+    ;; Update balances
+    (map-set eco-token-balance tx-sender (- user-balance amount))
+    (map-set eco-token-balance tx-sender (+ refund-amount (default-to u0 (map-get? eco-token-balance tx-sender))))
+    (map-set eco-token-balance admin (- admin-balance refund-amount))
+
+    (ok true)))
+
+;; Read-only functions
+
+;; Get current EcoToken price
+(define-read-only (get-eco-token-price)
+  (ok (var-get eco-token-price)))
+
+;; Get current transaction fee
+(define-read-only (get-transaction-fee)
+  (ok (var-get transaction-fee)))
+
+;; Get current energy reserve
+(define-read-only (get-energy-reserve)
+  (ok (var-get total-energy-reserve)))
+
+;; Get energy listing details for a seller
+(define-read-only (get-energy-listing (seller principal))
+  (ok (default-to {amount: u0, price: u0} (map-get? energy-listing {seller: seller}))))
+
+;; Get user EcoToken balance
+(define-read-only (get-eco-token-balance (user principal))
+  (ok (default-to u0 (map-get? eco-token-balance user))))
+
+;; Get user energy cap
+(define-read-only (get-user-energy-cap)
+  (ok (var-get user-energy-cap)))
+
